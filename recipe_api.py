@@ -3,19 +3,22 @@ import os, openai
 from base64 import b64encode
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 # ── 1. Konfiguration ──────────────────────────────────────────────────────
-openai.api_key = os.getenv("OPENAI_API_KEY")        # läggs i Render‑env
+openai.api_key = os.getenv("OPENAI_API_KEY")   # sätts i Render‑Environment
 
 app = FastAPI(title="Recept‑generator API")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# ── 2. Hälsokoll + HTML‑formulär på root ──────────────────────────────────
+# ── 2. Root = HTML‑formulär (GET) + hälsokoll (HEAD) ──────────────────────
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def root_get():
     return """
@@ -26,21 +29,20 @@ async def root_get():
         <title>Generera Longevity‑recept</title>
         <style>
           body{font-family:sans-serif;max-width:600px;margin:40px auto}
-          input,select{width:100%;padding:8px;margin:6px 0}
+          input,select,textarea{width:100%;padding:8px;margin:6px 0}
           button{background:#16a34a;color:#fff;padding:10px 16px;border:0;border-radius:4px}
         </style>
       </head>
       <body>
         <h1>Generera Longevity‑recept</h1>
-        <form method="post" action="/generate" enctype="multipart/form-data">
+        <form method="post" action="/generate">
           <label>Datakälla</label>
           <select name="choice">
-            <option value="1">Inventarielista (.txt)</option>
-            <option value="2">Bild på kylskåpet (.jpg/.png)</option>
-            <option value="3">Befintlig inventarielista (.txt)</option>
+            <option value="1">Inventarielista (klistra in text)</option>
+            <option value="3">Befintlig inventarielista (klistra in text)</option>
           </select>
 
-          <input type="file" name="textfile" accept=".txt,.jpg,.png" />
+          <textarea name="invent_text" rows="4" placeholder="Klistra in varulista här (en rad per vara)"></textarea>
 
           <input name="difficulty"   placeholder="Svårighetsgrad" required />
           <input name="meal_type"    placeholder="Måltid"          required />
@@ -54,7 +56,6 @@ async def root_get():
     </html>
     """
 
-# Shopify hälsokoll med HEAD
 @app.head("/", include_in_schema=False)
 async def root_head():
     return PlainTextResponse(status_code=200)
@@ -62,49 +63,21 @@ async def root_head():
 # ── 3. /generate  ─────────────────────────────────────────────────────────
 @app.post("/generate")
 async def generate(
-    choice: str            = Form(...),  # "1", "2" eller "3"
+    choice: str            = Form(...),         # "1" eller "3"
     difficulty: str        = Form(...),
     meal_type: str         = Form(...),
     num_people: str        = Form(...),
     cuisine_pref: str      = Form(""),
     dietary_pref: str      = Form(""),
-    textfile: UploadFile | None = File(None),
-    image:    UploadFile | None = File(None),
+    invent_text: str       = Form(""),          # text från formuläret
 ):
-    # 3.1  Hämta varulistan beroende på val
-    varulista = ""
+    # 3.1  Hämta varulistan
+    if choice not in ("1", "3") or not invent_text.strip():
+        raise HTTPException(400, "Ingen varulista inskickad")
 
-    if choice == "1":                       # Inventarielista .txt
-        if not textfile:
-            raise HTTPException(400, "textfile saknas")
-        varulista = (await textfile.read()).decode("utf‑8")
+    varulista = invent_text.strip()
 
-    elif choice == "2":                     # Bild på kylskåpet
-        if not image:
-            raise HTTPException(400, "image saknas")
-        img64 = b64encode(await image.read()).decode()
-        vision_prompt = [
-            {"type": "text",
-             "text": ("Detta är en bild av mitt kylskåp. "
-                      "Lista alla ingredienser på svenska, en per rad.")},
-            {"type": "image_url",
-             "image_url": {"url": f"data:image/jpeg;base64,{img64}"}}
-        ]
-        rsp = openai.ChatCompletion.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": vision_prompt}]
-        )
-        varulista = rsp.choices[0].message.content
-
-    elif choice == "3":                     # Befintlig inventarielista .txt
-        if not textfile:
-            raise HTTPException(400, "textfile saknas")
-        varulista = (await textfile.read()).decode("utf‑8")
-
-    else:
-        raise HTTPException(400, "ogiltigt choice‑värde")
-
-    # 3.2  Bygg huvud‑prompten
+    # 3.2  Bygg prompten
     prompt = f"""
 Nedan finns en lista över tillgängliga varor. Skriv ett recept med fokus på "Longevity":
 - Svårighetsgrad: {difficulty}
@@ -131,9 +104,8 @@ Lista över varor:
         messages=[{"role": "user", "content": prompt}]
     )
 
-    # 3.4  Logga token‑åtgång i Render‑logg
     usage = chat.usage
     print(f"Prompt: {usage.prompt_tokens}  Completion: {usage.completion_tokens}  Total: {usage.total_tokens}")
 
-    # 3.5  Returnera receptet
+    # 3.4  Returnera receptet
     return JSONResponse({"recipe": chat.choices[0].message.content})

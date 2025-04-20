@@ -2,12 +2,12 @@
 import os
 import openai
 from base64 import b64encode
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 # ── 1. Konfiguration ──────────────────────────────────────────────────────
-openai.api_key = os.getenv("OPENAI_API_KEY")          # läggs i Render‑env
+openai.api_key = os.getenv("OPENAI_API_KEY")  # läggs i Render‑env
 
 app = FastAPI(title="Recept‑generator API")
 app.add_middleware(
@@ -16,8 +16,10 @@ app.add_middleware(
 )
 
 # ── 2. Hälsokoll så Render håller tjänsten uppe ───────────────────────────
-@app.get("/")
-async def root():
+@app.api_route("/", methods=["GET", "HEAD"])
+async def root(request: Request):
+    if request.method == "HEAD":
+        return JSONResponse(content=None, status_code=200)
     return {"status": "ok"}
 
 # ── 3. /generate  ─────────────────────────────────────────────────────────
@@ -38,7 +40,7 @@ async def generate(
     if choice == "1":                       # Inventarielista .txt
         if not textfile:
             raise HTTPException(400, "textfile saknas")
-        varulista = (await textfile.read()).decode("utf‑8")
+        varulista = (await textfile.read()).decode("utf-8")
 
     elif choice == "2":                     # Bild på kylskåpet
         if not image:
@@ -60,7 +62,7 @@ async def generate(
     elif choice == "3":                     # Befintlig inventarielista .txt
         if not textfile:
             raise HTTPException(400, "textfile saknas")
-        varulista = (await textfile.read()).decode("utf‑8")
+        varulista = (await textfile.read()).decode("utf-8")
 
     else:
         raise HTTPException(400, "ogiltigt choice‑värde")

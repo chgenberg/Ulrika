@@ -1,4 +1,3 @@
-# recipe_api.py
 import os
 import openai
 from base64 import b64encode
@@ -7,42 +6,41 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 # ── 1. Konfiguration ──────────────────────────────────────────────────────
-openai.api_key = os.getenv("OPENAI_API_KEY")  # läggs i Render‑env
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-app = FastAPI(title="Recept‑generator API")
+app = FastAPI(title="Strukturerad Recept‑generator API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
 
-# ── 2. Hälsokoll så Render håller tjänsten uppe ───────────────────────────
+# ── 2. Hälsokoll ──────────────────────────────────────────────────────────
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root(request: Request):
     if request.method == "HEAD":
         return JSONResponse(content=None, status_code=200)
     return {"status": "ok"}
 
-# ── 3. /generate  ─────────────────────────────────────────────────────────
+# ── 3. /generate ──────────────────────────────────────────────────────────
 @app.post("/generate")
 async def generate(
-    choice: str            = Form(...),  # "1", "2" eller "3"
-    difficulty: str        = Form(...),
-    meal_type: str         = Form(...),
-    num_people: str        = Form(...),
-    cuisine_pref: str      = Form(""),
-    dietary_pref: str      = Form(""),
+    choice: str = Form(...),
+    difficulty: str = Form(...),
+    meal_type: str = Form(...),
+    num_people: str = Form(...),
+    cuisine_pref: str = Form(""),
+    dietary_pref: str = Form(""),
     textfile: UploadFile | None = File(None),
-    image:    UploadFile | None = File(None),
+    image: UploadFile | None = File(None),
 ):
-    # 3.1  Hämta varulistan beroende på val
     varulista = ""
 
-    if choice == "1":                       # Inventarielista .txt
+    if choice == "1":
         if not textfile:
             raise HTTPException(400, "textfile saknas")
         varulista = (await textfile.read()).decode("utf-8")
 
-    elif choice == "2":                     # Bild på kylskåpet
+    elif choice == "2":
         if not image:
             raise HTTPException(400, "image saknas")
         img64 = b64encode(await image.read()).decode()
@@ -59,7 +57,7 @@ async def generate(
         )
         varulista = rsp.choices[0].message.content
 
-    elif choice == "3":                     # Befintlig inventarielista .txt
+    elif choice == "3":
         if not textfile:
             raise HTTPException(400, "textfile saknas")
         varulista = (await textfile.read()).decode("utf-8")
@@ -67,7 +65,6 @@ async def generate(
     else:
         raise HTTPException(400, "ogiltigt choice‑värde")
 
-    # 3.2  Bygg huvud‑prompten
     prompt = f"""
 Nedan finns en lista över tillgängliga varor. Skriv ett recept med fokus på "Longevity":
 - Svårighetsgrad: {difficulty}
@@ -76,27 +73,26 @@ Nedan finns en lista över tillgängliga varor. Skriv ett recept med fokus på "
 - Kök: {cuisine_pref or 'valfritt'}
 - Kostpreferens: {dietary_pref or 'ingen'}
 
-Strukturera svaret enligt:
-
-1) Förslag på rätt
-2) Gör såhär
-3) Ingredienser du har
-4) Har du?
-5) Longevity‑fördelar
+Strukturera ditt svar i JSON-format med fälten:
+- "titel": Namn på rätten
+- "instruktioner": Steg för steg-instruktioner
+- "ingredienser": Lista på ingredienser du har
+- "eventuellt_saknas": Lista på ingredienser som eventuellt saknas
+- "longevity_fordelar": Fördelar med avseende på Longevity
 
 Lista över varor:
 {varulista}
-    """.strip()
+""".strip()
 
-    # 3.3  Anropa ChatGPT
     chat = openai.ChatCompletion.create(
         model="gpt-4-turbo",
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"}
     )
 
-    # 3.4  Logga token‑åtgång i Render‑logg
     usage = chat.usage
     print(f"Prompt: {usage.prompt_tokens}  Completion: {usage.completion_tokens}  Total: {usage.total_tokens}")
 
-    # 3.5  Returnera receptet
-    return JSONResponse({"recipe": chat.choices[0].message.content})
+    recipe_json = chat.choices[0].message.content
+
+    return JSONResponse(content={"recipe": recipe_json})
